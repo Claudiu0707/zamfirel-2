@@ -8,4 +8,7 @@ void readInstruction();
 void processInstruction();
 
 void setupControl();
+float convertStringToFloat(int length, String data);
+void calibrateLineFollowerData(int component, int length);
 #endif
+

@@ -20,13 +20,15 @@ SoftwareSerial SerialBT(11, 12);
 #define S2 7
 #define S1 8
 
+
+
 int carMode;          // 0 - SETUP MODE | 1 - DRIVER MODE | 2 - LINE FOLLOWER
 int instruction[2];
 bool instructionProcessed;
 int bytesRead = 0;
 
 int sensorLM, sensorL, sensorC, sensorR, sensorRM;
-int sensorLMW = -2, sensorLW = -1, sensorCW = 0, sensorRW = 1, sensorRMW = 2; // Can be modified
+int sensorLMW = -2, sensorLW = -1, sensorCW = 0, sensorRW = 1, sensorRMW = 2; // Can be modified (later)
 int sensorSum, sensorAvg;
 float error = 0, previousError = 0;
 float Kp = 50, Ki = 0.10, Kd = 15.00; // Can be modified
@@ -36,8 +38,10 @@ float baseSpeed = 120; // Can be modified
 int motorSpeed=255;
 int halfMotorSpeed = 90;
 
-unsigned long instructionExecutionTime = 5000; // 500 ms
+unsigned long instructionExecutionTime = 5000;
 unsigned long previousTime, currentTime;
+
+int setupItemSelection = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -64,6 +68,8 @@ void setup() {
   carMode = 0;
   currentTime = previousTime = 0;
   instructionProcessed = false;
+
+  setupItemSelection = 0;
 }
 
 void loop() {
@@ -75,23 +81,27 @@ void loop() {
   if (!instructionProcessed || carMode == 2)
     processInstruction();
 
-  // if(currentTime - previousTime > instructionExecutionTime) {
-  //     previousTime = currentTime;
-  //     stop();
-  // } else {
-  // }
+  // Serial.print("Kp = ");
+  // Serial.println(Kp);
+  // Serial.print("Ki = ");
+  // Serial.println(Ki);
+  // Serial.print("Kd = ");
+  // Serial.println(Kd);
+  // Serial.print("baseSpeed = ");
+  // Serial.println(baseSpeed);
+  // delay(200);
 }
 
 void readInstruction() {
-  bytesRead++;
   instruction[0] = SerialBT.read();
-  instruction[0] = instruction[0];
-  bytesRead++;
   instruction[1] = SerialBT.read();
+
+  instruction[0] = instruction[0];
   instruction[1] = instruction[1] - '0';
-  bytesRead = 0;
-  Serial.println(instruction[0]);
-  Serial.println(instruction[1]);
+  
+  // Serial.println(instruction[0]);
+  // Serial.println(instruction[1]);
+  
   instructionProcessed = false;
 }
 
@@ -155,15 +165,67 @@ void driverControl() {
       }
     }
 }
+
 void lineFollowerControl() {
   readIRData();
   convertIRData();
   pidCalculation();
 }
+
 void setupControl(){
-  
+  if (instruction[0] == 'W') { 
+    if (setupItemSelection == 4) setupItemSelection = 0;
+
+    calibrateLineFollowerData(setupItemSelection, instruction[1]);
+    setupItemSelection++;
+  }
 }
 
+void calibrateLineFollowerData(int component, int length) {
+  String data = "";
+  for (int i = 0; i < length && SerialBT.available(); i++) {
+      char c = SerialBT.read();
+      data += c; 
+  }
+
+  data += '\n';
+  Serial.print("Component:      ");
+  Serial.println(component);
+  switch (component) {
+    case 0:
+      Kp = convertStringToFloat(length, data);
+      // Serial.print("Kp = ");
+      // Serial.println(Kp);
+      break;
+    case 1:
+      Ki = convertStringToFloat(length, data);
+      // Serial.print("Ki = ");
+      // Serial.println(Ki);
+      break;
+    case 2:
+      Kd = convertStringToFloat(length, data);
+      // Serial.print("Kd = ");
+      // Serial.println(Kd);
+      break;
+    case 3:
+      baseSpeed = convertStringToFloat(length, data);
+      // Serial.print("baseSpeed = ");
+      // Serial.println(baseSpeed);
+      break;
+  }
+}
+
+float convertStringToFloat(int length, String data) {
+    if (length <= 0 || data.length() == 0) {
+        return 0.0f;
+    }
+
+    if (data.length() > length) {
+        data = data.substring(0, length);
+    }
+
+    return data.toFloat();
+}
 
 void forward(int leftMotorSpeed, int rightMotorSpeed) {
   analogWrite(ENA, leftMotorSpeed);
