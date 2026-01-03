@@ -1,10 +1,11 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include "CarBrain.h"
+#include <L298N.h>
 
-SoftwareSerial SerialBT(11, 12);
+SoftwareSerial bluetoothDevice(11, 12);
 
-// H-Bridge
+// L298N Bridges
 #define ENA 9
 #define IN1 A0
 #define IN2 A1
@@ -13,6 +14,10 @@ SoftwareSerial SerialBT(11, 12);
 #define IN4 A3
 #define HVCC A5
 
+// Motors
+L298N motorRight(ENA, IN1, IN2);
+L298N motorLeft(ENB, IN3, IN4);
+
 // IR Module 
 #define S5 4
 #define S4 5
@@ -20,32 +25,28 @@ SoftwareSerial SerialBT(11, 12);
 #define S2 7
 #define S1 8
 
+CarMode carMode;
 
-
-int carMode;          // 0 - SETUP MODE | 1 - DRIVER MODE | 2 - LINE FOLLOWER
-int instruction[2];
-bool instructionProcessed;
-int bytesRead = 0;
+Instruction instruction;
 
 int sensorLM, sensorL, sensorC, sensorR, sensorRM;
-int sensorLMW = -2, sensorLW = -1, sensorCW = 0, sensorRW = 1, sensorRMW = 2; // Can be modified (later)
+const int sensorLMW = -2, sensorLW = -1, sensorCW = 0, sensorRW = 1, sensorRMW = 2;
 int sensorSum, sensorAvg;
+
 float error = 0, previousError = 0;
-float Kp = 50, Ki = 0.10, Kd = 15.00; // Can be modified
+float Kp = 50, Ki = 0.10, Kd = 15.00;
+float lineFollowerBaseSpeed = 120;
 float I = 0;
-float baseSpeed = 120; // Can be modified
 
-int motorSpeed=255;
-int halfMotorSpeed = 90;
+// Keep track of which parameter is calibrated
+int parameterToCalibrateIndex = 0;  
+const int maxParametersToCalibrate = 4;
 
-unsigned long instructionExecutionTime = 5000;
-unsigned long previousTime, currentTime;
-
-int setupItemSelection = 0;
+const int motorSpeed = 255;
 
 void setup() {
   Serial.begin(115200);
-  SerialBT.begin(9600);
+  bluetoothDevice.begin(9600);
 
   // H-Bridge
   pinMode(ENA, OUTPUT);
@@ -65,102 +66,108 @@ void setup() {
   pinMode(S5, INPUT);
 
   // carMode
-  carMode = 0;
-  currentTime = previousTime = 0;
-  instructionProcessed = false;
+  carMode = SETUP_MODE;
+  parameterToCalibrateIndex = 0;
 
-  setupItemSelection = 0;
+  instruction.processed = false;
 }
 
 void loop() {
-  currentTime = millis();
 
-  if (SerialBT.available() >= 2) readInstruction();
-  else instruction[0] = instruction[1] = 0;
+  if (bluetoothDevice.available() >= 2) readInstruction();
+  else instruction = {0, 0, false};
   
-  if (!instructionProcessed || carMode == 2)
+  if (shouldRunControlLoop())
     processInstruction();
+}
 
-  // Serial.print("Kp = ");
-  // Serial.println(Kp);
-  // Serial.print("Ki = ");
-  // Serial.println(Ki);
-  // Serial.print("Kd = ");
-  // Serial.println(Kd);
-  // Serial.print("baseSpeed = ");
-  // Serial.println(baseSpeed);
-  // delay(200);
+// Instruction must be processed either if instruction was not yet processed, or it is in line follower mode
+// which needs continuous processing
+bool shouldRunControlLoop() {
+  return !instruction.processed || carMode == LINE_FOLLOWER_MODE;
 }
 
 void readInstruction() {
-  instruction[0] = SerialBT.read();
-  instruction[1] = SerialBT.read();
-
-  instruction[0] = instruction[0];
-  instruction[1] = instruction[1] - '0';
+  instruction.type = bluetoothDevice.read();
+  instruction.value = bluetoothDevice.read() - '0';
   
-  // Serial.println(instruction[0]);
-  // Serial.println(instruction[1]);
+  Serial.println(instruction.type);
+  Serial.println(instruction.value);
   
-  instructionProcessed = false;
+  instruction.processed = false;
 }
 
-// TODO: Logic is a little ambigous here: How should I process instructions regarding mode selection?
-// TODO: Clear it a little?
 void processInstruction() {
-  if (carMode == 0) {
-    setupControl();
-  } else if (carMode == 1) {
-    driverControl();
-  } else if (carMode == 2) {
-    lineFollowerControl();
-  }
+  handleModeChange();
+  runCurrentMode();
+  
+  instruction.processed = true;
+}
 
-  if (instruction[0] == 'S') {
-    if (instruction[1] == 0) {
-      carMode = 0;
-      Serial.println("Setup Mode SELECTED");
-    } else if (instruction[1] == 1){
-      carMode = 1;
-      Serial.println("Driver Mode SELECTED");
-    } else if (instruction[1] == 2){
-      carMode = 2;
-      Serial.println("Line Follower Mode SELECTED");
+void handleModeChange() {
+  // Check if operation mode was changed   
+  if (instruction.type == 'S') {
+    switch (instruction.value) {
+      case SETUP_MODE:
+        carMode = SETUP_MODE;
+        Serial.println("Setup Mode SELECTED");
+        break;
+      case DRIVER_MODE:
+        carMode = DRIVER_MODE;
+        Serial.println("Driver Mode SELECTED");
+        break;
+      case LINE_FOLLOWER_MODE:
+        carMode = LINE_FOLLOWER_MODE;
+        Serial.println("Line Follower Mode SELECTED");
+        break;
     }
     stop();
   }
-  instructionProcessed = true;
+}
+
+void runCurrentMode() {
+  switch (carMode) {
+    case SETUP_MODE:
+      setupControl();
+      break;
+    case DRIVER_MODE:
+      driverControl();
+      break;
+    case LINE_FOLLOWER_MODE:
+      lineFollowerControl();
+      break;
+  }
 }
 
 void driverControl() {
-  if (instruction[0] == 'D') {
-      switch (instruction[1]) {
-        case 0:
+  if (instruction.type == 'D') {
+      switch (instruction.value) {
+        case STOP:
           stop();
           break;
-        case 1:
+        case FORWARD:
           forward(motorSpeed, motorSpeed);
           break;
-        case 2:
-          reverse(motorSpeed, motorSpeed);
+        case BACKWARD:
+          backward(motorSpeed, motorSpeed);
           break;
-        case 3:
+        case LEFT:
           steerLeft(motorSpeed, motorSpeed);
           break;
-        case 4: 
+        case RIGHT: 
           steerRight(motorSpeed, motorSpeed);
           break;
-        case 5:
-          forward(motorSpeed, halfMotorSpeed);
+        case FORWARD_LEFT:
+          forward(motorSpeed / 2, motorSpeed);
           break;
-        case 6:
-          forward(halfMotorSpeed, motorSpeed);
+        case FORWARD_RIGHT:
+          forward(motorSpeed, motorSpeed / 2);
           break;
-        case 7:
-          reverse(motorSpeed, halfMotorSpeed);
+        case BACKWARD_LEFT:
+          backward(motorSpeed / 2, motorSpeed);
           break;
-        case 8:
-          reverse(halfMotorSpeed, motorSpeed);
+        case BACKWARD_RIGHT:
+          backward(motorSpeed, motorSpeed / 2);
           break;
       }
     }
@@ -168,111 +175,89 @@ void driverControl() {
 
 void lineFollowerControl() {
   readIRData();
-  convertIRData();
-  pidCalculation();
+  pid();
 }
 
 void setupControl(){
-  if (instruction[0] == 'W') { 
-    if (setupItemSelection == 4) setupItemSelection = 0;
+  // 'W' command = Wait for specified number of bytes(chars) 
+  // Paramteres calibration loops trough: Kp, Ki, Kd, lineFollowerBaseSpeed 
+  if (instruction.type == 'W') { 
+    if (parameterToCalibrateIndex == maxParametersToCalibrate) parameterToCalibrateIndex = 0;
 
-    calibrateLineFollowerData(setupItemSelection, instruction[1]);
-    setupItemSelection++;
+    calibrateLineFollowerData(parameterToCalibrateIndex, instruction.value);
+    parameterToCalibrateIndex++;
   }
 }
 
 void calibrateLineFollowerData(int component, int length) {
   String data = "";
-  for (int i = 0; i < length && SerialBT.available(); i++) {
-      char c = SerialBT.read();
+  for (int i = 0; i < length && bluetoothDevice.available(); i++) {
+      char c = bluetoothDevice.read();
       data += c; 
   }
-
   data += '\n';
-  Serial.print("Component:      ");
-  Serial.println(component);
+  
   switch (component) {
     case 0:
       Kp = convertStringToFloat(length, data);
-      // Serial.print("Kp = ");
-      // Serial.println(Kp);
       break;
     case 1:
       Ki = convertStringToFloat(length, data);
-      // Serial.print("Ki = ");
-      // Serial.println(Ki);
       break;
     case 2:
       Kd = convertStringToFloat(length, data);
-      // Serial.print("Kd = ");
-      // Serial.println(Kd);
       break;
     case 3:
-      baseSpeed = convertStringToFloat(length, data);
-      // Serial.print("baseSpeed = ");
-      // Serial.println(baseSpeed);
+      lineFollowerBaseSpeed = convertStringToFloat(length, data);
       break;
   }
 }
 
-float convertStringToFloat(int length, String data) {
-    if (length <= 0 || data.length() == 0) {
-        return 0.0f;
-    }
+float convertStringToFloat(unsigned int length, String data) {
+    // Parameters calibrated must be valid floats
+    if (length <= 0 || data.length() == 0) return 0.0f;
 
-    if (data.length() > length) {
-        data = data.substring(0, length);
-    }
+    if (data.length() > length) data = data.substring(0, length);
 
     return data.toFloat();
 }
 
 void forward(int leftMotorSpeed, int rightMotorSpeed) {
-  analogWrite(ENA, leftMotorSpeed);
-  analogWrite(ENB, rightMotorSpeed);
+  motorLeft.setSpeed(leftMotorSpeed);
+  motorRight.setSpeed(rightMotorSpeed);
 
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
+  motorLeft.forward();
+  motorRight.forward();
 }
-void reverse(int leftMotorSpeed, int rightMotorSpeed) {
-  analogWrite(ENA, leftMotorSpeed);
-  analogWrite(ENB, rightMotorSpeed);
+void backward(int leftMotorSpeed, int rightMotorSpeed) {
+  motorLeft.setSpeed (leftMotorSpeed);
+  motorRight.setSpeed (rightMotorSpeed);
 
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
+  motorLeft.backward();
+  motorRight.backward();
 }
+
 void steerLeft(int leftMotorSpeed, int rightMotorSpeed) {
-  analogWrite(ENA, motorSpeed);
-  analogWrite(ENB, motorSpeed);
+  motorLeft.setSpeed(leftMotorSpeed);
+  motorRight.setSpeed(rightMotorSpeed);
 
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
+  motorLeft.backward();
+  motorRight.forward();
 }
 void steerRight(int leftMotorSpeed, int rightMotorSpeed) {
-  analogWrite(ENA, motorSpeed);
-  analogWrite(ENB, motorSpeed);
+  motorLeft.setSpeed(leftMotorSpeed);
+  motorRight.setSpeed(rightMotorSpeed);
 
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
+  motorLeft.forward();
+  motorRight.backward();
 }
+
 void stop() {
-  analogWrite(ENA, 0);
-  analogWrite(ENB, 0);
+  motorLeft.stop();
+  motorRight.stop();
 }
 
-void pidCalculation() {
+void pid() {
   sensorSum = 0;
   sensorAvg = 0;
 
@@ -292,29 +277,33 @@ void pidCalculation() {
   previousError = error;
 
   float correction = Kp * P + Ki * I + Kd * D;
-  int leftSpeed = constrain(baseSpeed - correction, 0, 255);
-  int rightSpeed = constrain(baseSpeed + correction, 0, 255);
-
-  // {
-  //   Serial.print("leftSpeed: ");
-  //   Serial.print(leftSpeed);
-  //   Serial.print("  | rightSpeed: ");
-  //   Serial.print(rightSpeed);
-  //   Serial.print("  |  error: ");
-  //   Serial.println(error);
-  // }
+  int leftSpeed = constrain(lineFollowerBaseSpeed - correction, 0, 255);
+  int rightSpeed = constrain(lineFollowerBaseSpeed + correction, 0, 255);
   
   forward(leftSpeed, rightSpeed);
-  // delay(300);
 }
 
 void readIRData() {
+  // The sensor module I used was a digital one
   sensorLM = digitalRead(S1);
   sensorL  = digitalRead(S2);
   sensorC  = digitalRead(S3);
   sensorR  = digitalRead(S4);
   sensorRM = digitalRead(S5);
+
+  convertIRData();
 }
+
+void convertIRData() {
+  // The IR sensors send '0' on line detection
+  // For my ease, i perform a negation on all values 
+  sensorLM = !sensorLM;
+  sensorL  = !sensorL;
+  sensorC  = !sensorC;
+  sensorR  = !sensorR;
+  sensorRM = !sensorRM;
+}
+
 void printIRData(){
   Serial.println();
   Serial.print("S1 = ");
@@ -332,11 +321,4 @@ void printIRData(){
   Serial.print(" | S5 = ");
   Serial.print(sensorRM);
   delay(3000);
-}
-void convertIRData() {
-  sensorLM = 1 - sensorLM * 1;
-  sensorL  = 1 - sensorL * 1;
-  sensorC  = 1 - sensorC * 1;
-  sensorR  = 1 - sensorR * 1;
-  sensorRM = 1 - sensorRM * 1;
 }
