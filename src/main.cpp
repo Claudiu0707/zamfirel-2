@@ -20,21 +20,21 @@ SoftwareSerial SerialBT(11, 12);
 #define S2 7
 #define S1 8
 
-int carMode;          // 0 - STAND BY | 1 - DRIVER MODE | 2 - LINE FOLLOWER
+int carMode;          // 0 - SETUP MODE | 1 - DRIVER MODE | 2 - LINE FOLLOWER
 int instruction[2];
 bool instructionProcessed;
 int bytesRead = 0;
 
 int sensorLM, sensorL, sensorC, sensorR, sensorRM;
-int sensorLMW = -2, sensorLW = -1, sensorCW = 0, sensorRW = 1, sensorRMW = 2;
+int sensorLMW = -2, sensorLW = -1, sensorCW = 0, sensorRW = 1, sensorRMW = 2; // Can be modified
 int sensorSum, sensorAvg;
 float error = 0, previousError = 0;
-float Kp = 50, Ki = 0.10, Kd = 15.00;
+float Kp = 50, Ki = 0.10, Kd = 15.00; // Can be modified
 float I = 0;
-float baseSpeed = 90;
+float baseSpeed = 120; // Can be modified
 
 int motorSpeed=255;
-int halfMotorSpeed = 60;
+int halfMotorSpeed = 90;
 
 unsigned long instructionExecutionTime = 5000; // 500 ms
 unsigned long previousTime, currentTime;
@@ -61,7 +61,7 @@ void setup() {
   pinMode(S5, INPUT);
 
   // carMode
-  carMode = 2;
+  carMode = 0;
   currentTime = previousTime = 0;
   instructionProcessed = false;
 }
@@ -69,25 +69,17 @@ void setup() {
 void loop() {
   currentTime = millis();
 
+  if (SerialBT.available() >= 2) readInstruction();
+  else instruction[0] = instruction[1] = 0;
+  
+  if (!instructionProcessed || carMode == 2)
+    processInstruction();
 
-  if (SerialBT.available() >= 2) {
-      readInstruction();
-  }
-  else {
-      instruction[0] = 0;
-      instruction[1] = 0;
-  }
-
-  if(currentTime - previousTime > instructionExecutionTime) {
-      previousTime = currentTime;
-      stop();
-  } else {
-      if (!instructionProcessed)
-        processInstruction();
-  }
-  readIRData();
-  convertIRData();
-  pidCalculation();
+  // if(currentTime - previousTime > instructionExecutionTime) {
+  //     previousTime = currentTime;
+  //     stop();
+  // } else {
+  // }
 }
 
 void readInstruction() {
@@ -98,18 +90,35 @@ void readInstruction() {
   instruction[1] = SerialBT.read();
   instruction[1] = instruction[1] - '0';
   bytesRead = 0;
-  // Serial.println(instruction[0]);
-  // Serial.println(instruction[1]);
+  Serial.println(instruction[0]);
+  Serial.println(instruction[1]);
   instructionProcessed = false;
 }
 
+// TODO: Logic is a little ambigous here: How should I process instructions regarding mode selection?
+// TODO: Clear it a little?
 void processInstruction() {
-  if (carMode == 1) {
+  if (carMode == 0) {
+    setupControl();
+  } else if (carMode == 1) {
     driverControl();
   } else if (carMode == 2) {
     lineFollowerControl();
   }
-  
+
+  if (instruction[0] == 'S') {
+    if (instruction[1] == 0) {
+      carMode = 0;
+      Serial.println("Setup Mode SELECTED");
+    } else if (instruction[1] == 1){
+      carMode = 1;
+      Serial.println("Driver Mode SELECTED");
+    } else if (instruction[1] == 2){
+      carMode = 2;
+      Serial.println("Line Follower Mode SELECTED");
+    }
+    stop();
+  }
   instructionProcessed = true;
 }
 
@@ -147,9 +156,13 @@ void driverControl() {
     }
 }
 void lineFollowerControl() {
+  readIRData();
+  convertIRData();
+  pidCalculation();
+}
+void setupControl(){
   
 }
-
 
 
 void forward(int leftMotorSpeed, int rightMotorSpeed) {
@@ -220,14 +233,14 @@ void pidCalculation() {
   int leftSpeed = constrain(baseSpeed - correction, 0, 255);
   int rightSpeed = constrain(baseSpeed + correction, 0, 255);
 
-  {
-    Serial.print("leftSpeed: ");
-    Serial.print(leftSpeed);
-    Serial.print("  | rightSpeed: ");
-    Serial.print(rightSpeed);
-    Serial.print("  |  error: ");
-    Serial.println(error);
-  }
+  // {
+  //   Serial.print("leftSpeed: ");
+  //   Serial.print(leftSpeed);
+  //   Serial.print("  | rightSpeed: ");
+  //   Serial.print(rightSpeed);
+  //   Serial.print("  |  error: ");
+  //   Serial.println(error);
+  // }
   
   forward(leftSpeed, rightSpeed);
   // delay(300);

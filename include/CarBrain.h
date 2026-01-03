@@ -7,5 +7,5 @@
 void readInstruction();
 void processInstruction();
 
-void printIRData();
+void setupControl();
 #endif
