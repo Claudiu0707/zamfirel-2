@@ -30,31 +30,33 @@ CarMode carMode;
 Instruction instruction;
 
 int sensorLM, sensorL, sensorC, sensorR, sensorRM;
-const int sensorLMW = -2, sensorLW = -1, sensorCW = 0, sensorRW = 1, sensorRMW = 2;
-int sensorSum, sensorAvg;
+const float sensorLMW = -1.5, sensorLW = -0.75, sensorCW = 0, sensorRW = 0.75, sensorRMW = 1.5;
+float sensorSum, sensorAvg;
 
 float error = 0, previousError = 0;
-float Kp = 50, Ki = 0.10, Kd = 15.00;
-float lineFollowerBaseSpeed = 120;
+float Kp = 18, Ki = 0.00, Kd = 10.00;
+float lineFollowerBaseSpeed = 140;
+float lineFollowerLeftBaseSpeed = lineFollowerBaseSpeed;
+float lineFollowerRightBaseSpeed = 0.85 * lineFollowerBaseSpeed;
 float I = 0;
 
 // Keep track of which parameter is calibrated
 int parameterToCalibrateIndex = 0;  
-const int maxParametersToCalibrate = 4;
+const int maxParametersToCalibrate = 5;
 
-const int motorSpeed = 255;
+// Tune these 4 values to achieve aproximative equal motor speeds :)))
+// My soldering was pretty bad or the L298N is incredibly bad
+// either way, these values need to be tuned
+const int LEFT_FWD  = 255;
+const int RIGHT_FWD = 190;
+
+const int LEFT_BWD  = 170;
+const int RIGHT_BWD = 170;
+
 
 void setup() {
   Serial.begin(115200);
   bluetoothDevice.begin(9600);
-
-  // H-Bridge
-  pinMode(ENA, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(ENB, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
 
   digitalWrite(HVCC, HIGH);
 
@@ -81,8 +83,8 @@ void loop() {
     processInstruction();
 }
 
-// Instruction must be processed either if instruction was not yet processed, or it is in line follower mode
-// which needs continuous processing
+// Instruction must be processed either if instruction was not yet processed, 
+// or it is in line follower mode which needs continuous processing
 bool shouldRunControlLoop() {
   return !instruction.processed || carMode == LINE_FOLLOWER_MODE;
 }
@@ -141,36 +143,36 @@ void runCurrentMode() {
 
 void driverControl() {
   if (instruction.type == 'D') {
-      switch (instruction.value) {
-        case STOP:
-          stop();
-          break;
-        case FORWARD:
-          forward(motorSpeed, motorSpeed);
-          break;
-        case BACKWARD:
-          backward(motorSpeed, motorSpeed);
-          break;
-        case LEFT:
-          steerLeft(motorSpeed, motorSpeed);
-          break;
-        case RIGHT: 
-          steerRight(motorSpeed, motorSpeed);
-          break;
-        case FORWARD_LEFT:
-          forward(motorSpeed / 2, motorSpeed);
-          break;
-        case FORWARD_RIGHT:
-          forward(motorSpeed, motorSpeed / 2);
-          break;
-        case BACKWARD_LEFT:
-          backward(motorSpeed / 2, motorSpeed);
-          break;
-        case BACKWARD_RIGHT:
-          backward(motorSpeed, motorSpeed / 2);
-          break;
-      }
+    switch (instruction.value) {
+      case STOP:
+        stop();
+        break;
+      case FORWARD:
+        forward(LEFT_FWD, RIGHT_FWD);
+        break;
+      case BACKWARD:
+        backward(LEFT_BWD, RIGHT_BWD);
+        break;
+      case LEFT:
+        steerLeft(LEFT_FWD, RIGHT_FWD);
+        break;
+      case RIGHT:
+        steerRight(LEFT_FWD, RIGHT_FWD);
+        break;
+      case FORWARD_LEFT:
+        forward(LEFT_FWD / 2, RIGHT_FWD);
+        break;
+      case FORWARD_RIGHT:
+        forward(LEFT_FWD, RIGHT_FWD / 2);
+        break;
+      case BACKWARD_LEFT:
+        backward(LEFT_BWD / 2, RIGHT_BWD);
+        break;
+      case BACKWARD_RIGHT:
+        backward(LEFT_BWD, RIGHT_BWD / 2);
+        break;
     }
+  }
 }
 
 void lineFollowerControl() {
@@ -190,6 +192,9 @@ void setupControl(){
 }
 
 void calibrateLineFollowerData(int component, int length) {
+  // Small delay to allow data to arrive
+  delay(5);
+
   String data = "";
   for (int i = 0; i < length && bluetoothDevice.available(); i++) {
       char c = bluetoothDevice.read();
@@ -208,8 +213,13 @@ void calibrateLineFollowerData(int component, int length) {
       Kd = convertStringToFloat(length, data);
       break;
     case 3:
-      lineFollowerBaseSpeed = convertStringToFloat(length, data);
+      lineFollowerLeftBaseSpeed = convertStringToFloat(length, data);
       break;
+    case 4: 
+      lineFollowerRightBaseSpeed = convertStringToFloat(length, data);
+      break;
+    default:
+      return;
   }
 }
 
@@ -277,9 +287,33 @@ void pid() {
   previousError = error;
 
   float correction = Kp * P + Ki * I + Kd * D;
-  int leftSpeed = constrain(lineFollowerBaseSpeed - correction, 0, 255);
-  int rightSpeed = constrain(lineFollowerBaseSpeed + correction, 0, 255);
-  
+  int leftSpeed = constrain(lineFollowerBaseSpeed + correction, 0, 255);
+  int rightSpeed = constrain(lineFollowerBaseSpeed - correction, 0, 255);
+
+  Serial.println("╔════════════════════════════════════════════════════════╗");
+  Serial.print("║ P: ");
+  Serial.print(P, 3);
+  Serial.print("\t│ I: ");
+  Serial.print(I, 3);
+  Serial.print("\t│ D: ");
+  Serial.print(D, 3);
+  Serial.println("\t║");
+  Serial.println("╟────────────────────────────────────────────────────────╢");
+  Serial.print("║ Error: ");
+  Serial.print(error, 3);
+  Serial.print("\t│ Correction: ");
+  Serial.print(correction, 2);
+  Serial.println("\t\t║");
+  Serial.println("╟────────────────────────────────────────────────────────╢");
+  Serial.print("║ Left: ");
+  Serial.print(leftSpeed);
+  Serial.print("\t│ Right: ");
+  Serial.print(rightSpeed);
+  Serial.println("\t\t\t║");
+  Serial.println("╚════════════════════════════════════════════════════════╝");
+  Serial.println();
+  // delay(1000);
+  // printIRData();
   forward(leftSpeed, rightSpeed);
 }
 
@@ -319,6 +353,6 @@ void printIRData(){
   Serial.print(sensorR);
   
   Serial.print(" | S5 = ");
-  Serial.print(sensorRM);
+  Serial.println(sensorRM);
   delay(3000);
 }
