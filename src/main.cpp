@@ -40,6 +40,8 @@ float lineFollowerLeftBaseSpeed = lineFollowerBaseSpeed;
 float lineFollowerRightBaseSpeed = 0.85 * lineFollowerBaseSpeed;
 float I = 0;
 
+bool canFollowLine;
+
 // Keep track of which parameter is calibrated
 int parameterToCalibrateIndex = 0;  
 const int maxParametersToCalibrate = 5;
@@ -48,7 +50,7 @@ const int maxParametersToCalibrate = 5;
 // My soldering was pretty bad or the L298N is incredibly bad
 // either way, these values need to be tuned
 const int LEFT_FWD  = 255;
-const int RIGHT_FWD = 190;
+const int RIGHT_FWD = 255;
 
 const int LEFT_BWD  = 170;
 const int RIGHT_BWD = 170;
@@ -72,6 +74,8 @@ void setup() {
   parameterToCalibrateIndex = 0;
 
   instruction.processed = false;
+
+  canFollowLine = false;
 }
 
 void loop() {
@@ -160,24 +164,35 @@ void driverControl() {
         steerRight(LEFT_FWD, RIGHT_FWD);
         break;
       case FORWARD_LEFT:
-        forward(LEFT_FWD / 2, RIGHT_FWD);
+        forward(LEFT_FWD / 3, RIGHT_FWD);
         break;
       case FORWARD_RIGHT:
-        forward(LEFT_FWD, RIGHT_FWD / 2);
+        forward(LEFT_FWD, RIGHT_FWD / 3);
         break;
       case BACKWARD_LEFT:
-        backward(LEFT_BWD / 2, RIGHT_BWD);
+        backward(LEFT_BWD / 3, RIGHT_BWD);
         break;
       case BACKWARD_RIGHT:
-        backward(LEFT_BWD, RIGHT_BWD / 2);
+        backward(LEFT_BWD, RIGHT_BWD / 3);
         break;
     }
   }
 }
 
 void lineFollowerControl() {
-  readIRData();
-  pid();
+  if (instruction.type == 'L'){
+    if (instruction.value == 0) canFollowLine = false;
+    else if (instruction.value == 1) canFollowLine = true;
+    
+    instruction.processed = true;
+  } 
+
+  if (canFollowLine) {
+    readIRData();
+    pid();
+  } else {
+    stop();
+  }
 }
 
 void setupControl(){
